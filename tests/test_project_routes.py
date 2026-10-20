@@ -14,6 +14,7 @@ from routes.project_routes import setup_project_routes
 
 
 _TMPDB = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+_TMPDB.close()
 _ENGINE = create_engine(
     f"sqlite:///{_TMPDB.name}",
     connect_args={"check_same_thread": False},
@@ -110,6 +111,26 @@ def test_project_list_excludes_other_users_projects(monkeypatch):
     listed = client.get("/api/projects")
     assert listed.status_code == 200
     assert [p["name"] for p in listed.json()] == ["Alice project"]
+
+
+def test_project_removal_archive_and_restore_preserve_chat(monkeypatch):
+    _reset_db()
+    sid = _session("alice", "Release chat")
+    client = _client(monkeypatch)
+    project_id = client.post("/api/projects", data={"name": "Release"}).json()["id"]
+    assert client.post(f"/api/projects/{project_id}/sessions/{sid}").status_code == 200
+    removed = client.delete(f"/api/projects/{project_id}/sessions/{sid}")
+    assert removed.status_code == 200
+    assert removed.json()["project_id"] is None
+    assert client.post(f"/api/projects/{project_id}/sessions/{sid}").status_code == 200
+    assert client.delete(f"/api/projects/{project_id}").status_code == 200
+    assert client.get("/api/projects").json() == []
+    assert client.post(f"/api/projects/{project_id}/restore").json()["session_count"] == 1
+    db = _TS()
+    try:
+        assert db.get(DbSession, sid).project_id == project_id
+    finally:
+        db.close()
 
 
 def test_shared_project_detail_and_brief_exclude_other_owners_chats(monkeypatch):
